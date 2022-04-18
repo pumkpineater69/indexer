@@ -60,7 +60,6 @@ module.exports = {
       return
     }
 
-
     const config = loadValidatedConfig()
     const deployment = parseDeploymentID(rawDeployment)
 

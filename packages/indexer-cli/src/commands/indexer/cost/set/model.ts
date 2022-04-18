@@ -51,7 +51,7 @@ module.exports = {
       process.exitCode = 1
       return
     }
-    
+
     let model = null
     try {
       model = fs.readFileSync(filename, 'utf8').trim()
