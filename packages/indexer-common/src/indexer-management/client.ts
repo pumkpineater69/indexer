@@ -14,13 +14,17 @@ import { NetworkSubgraph } from '../network-subgraph'
 
 import { IndexerManagementModels, IndexingRuleCreationAttributes } from './models'
 
-import indexingRuleResolvers from './resolvers/indexing-rules'
-import statusResolvers from './resolvers/indexer-status'
+import allocationResolvers from './resolvers/allocations'
 import costModelResolvers from './resolvers/cost-models'
+import indexingRuleResolvers from './resolvers/indexing-rules'
 import poiDisputeResolvers from './resolvers/poi-disputes'
+import statusResolvers from './resolvers/indexer-status'
 import { BigNumber } from 'ethers'
 import { Op, Sequelize } from 'sequelize'
 import { IndexingStatusResolver } from '../indexing-status'
+import { TransactionManager } from '../transactions'
+import { SubgraphManager } from './subgraphs'
+import { AllocationReceiptCollector } from '../allocations/query-fees'
 
 export interface IndexerManagementFeatures {
   injectDai: boolean
@@ -31,11 +35,14 @@ export interface IndexerManagementResolverContext {
   address: string
   contracts: NetworkContracts
   indexingStatusResolver: IndexingStatusResolver
+  subgraphManager: SubgraphManager
   networkSubgraph: NetworkSubgraph
-  logger?: Logger
+  logger: Logger
   defaults: IndexerManagementDefaults
   features: IndexerManagementFeatures
   dai: Eventual<string>
+  transactionManager: TransactionManager
+  receiptCollector: AllocationReceiptCollector
 }
 
 const SCHEMA_SDL = gql`
@@ -52,6 +59,56 @@ const SCHEMA_SDL = gql`
     deployment
     subgraph
     group
+  }
+
+  input AllocationFilter {
+    status: String
+    allocation: String
+    subgraphDeployment: String
+  }
+
+  enum AllocationStatus {
+    Null # == indexer == address(0)
+    Active # == not Null && tokens > 0 #
+    Closed # == Active && closedAtEpoch != 0. Still can collect, while you are waiting to be finalized. a.k.a settling
+    Finalized # == Closing && closedAtEpoch + channelDisputeEpochs > now(). Note, the subgraph has no way to return this value. it is implied
+    Claimed # == not Null && tokens == 0 - i.e. finalized, and all tokens withdrawn
+  }
+
+  type Allocation {
+    id: String!
+    indexer: String!
+    subgraphDeployment: String!
+    allocatedTokens: String!
+    createdAtEpoch: Int!
+    closedAtEpoch: Int
+    ageInEpochs: Int!
+    indexingRewards: String!
+    queryFeesCollected: String!
+    signalledTokens: BigInt!
+    stakedTokens: BigInt!
+    status: AllocationStatus!
+  }
+
+  type CreateAllocationResult {
+    allocation: String!
+    deployment: String!
+    allocatedTokens: String!
+  }
+
+  type CloseAllocationResult {
+    allocation: String!
+    allocatedTokens: String!
+    indexingRewards: String!
+    receiptsWorthCollecting: Boolean!
+  }
+
+  type reallocateAllocationResult {
+    closedAllocation: String!
+    indexingRewardsCollected: String!
+    receiptsWorthCollecting: Boolean!
+    createdAllocation: String!
+    createdAllocationStake: String!
   }
 
   type POIDispute {
@@ -211,6 +268,8 @@ const SCHEMA_SDL = gql`
     dispute(allocationID: String!): POIDispute
     disputes(status: String!, minClosedEpoch: Int!): [POIDispute]!
     disputesClosedAfter(closedAfterBlock: BigInt!): [POIDispute]!
+
+    allocations(filter: AllocationFilter!): [Allocation!]!
   }
 
   type Mutation {
@@ -222,6 +281,23 @@ const SCHEMA_SDL = gql`
 
     storeDisputes(disputes: [POIDisputeInput!]!): [POIDispute!]
     deleteDisputes(allocationIDs: [String!]!): Int!
+
+    createAllocation(
+      deployment: String!
+      amount: String!
+      indexNode: String
+    ): CreateAllocationResult!
+    closeAllocation(
+      allocation: String!
+      poi: String
+      force: Boolean
+    ): CloseAllocationResult!
+    reallocateAllocation(
+      allocation: String!
+      poi: String
+      amount: String!
+      force: Boolean
+    ): reallocateAllocationResult!
   }
 `
 
@@ -237,10 +313,14 @@ export interface IndexerManagementClientOptions {
   address: string
   contracts: NetworkContracts
   indexingStatusResolver: IndexingStatusResolver
+  indexNodeIDs: string[]
+  deploymentManagementEndpoint: string
   networkSubgraph: NetworkSubgraph
   logger?: Logger
   defaults: IndexerManagementDefaults
   features: IndexerManagementFeatures
+  transactionManager?: TransactionManager
+  receiptCollector?: AllocationReceiptCollector
 }
 
 export class IndexerManagementClient extends Client {
@@ -295,10 +375,14 @@ export const createIndexerManagementClient = async (
     address,
     contracts,
     indexingStatusResolver,
+    indexNodeIDs,
+    deploymentManagementEndpoint,
     networkSubgraph,
     logger,
     defaults,
     features,
+    transactionManager,
+    receiptCollector,
   } = options
   const schema = buildSchema(print(SCHEMA_SDL))
   const resolvers = {
@@ -306,9 +390,12 @@ export const createIndexerManagementClient = async (
     ...statusResolvers,
     ...costModelResolvers,
     ...poiDisputeResolvers,
+    ...allocationResolvers,
   }
 
   const dai: WritableEventual<string> = mutable()
+
+  const subgraphManager = new SubgraphManager(deploymentManagementEndpoint, indexNodeIDs)
 
   const exchange = executeExchange({
     schema,
@@ -318,11 +405,14 @@ export const createIndexerManagementClient = async (
       address,
       contracts,
       indexingStatusResolver,
+      subgraphManager,
       networkSubgraph,
       logger: logger ? logger.child({ component: 'IndexerManagementClient' }) : undefined,
       defaults,
       features,
       dai,
+      transactionManager,
+      receiptCollector,
     },
   })
 

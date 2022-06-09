@@ -91,6 +91,11 @@ export class AllocationReceiptManager implements ReceiptManager {
       receiptData,
     )
 
+    // If the fee is 0, validate verifier and return allocation ID for the signer
+    if (receipt.fees.isZero()) {
+      return receipt.allocation
+    }
+
     this._queue({
       id: receipt.id,
       allocation: receipt.allocation,
@@ -179,7 +184,7 @@ export class AllocationReceiptManager implements ReceiptManager {
               }
             }
           },
-          { retries: 20 },
+          { retries: 20 } as pRetry.Options,
         )
       } catch (err) {
         // If we fail for whatever reason, keep this data in the cache to flush

@@ -59,6 +59,8 @@ let models: IndexerManagementModels
 let address: string
 let contracts: NetworkContracts
 let logger: Logger
+let indexNodeIDs: string[]
+let statusEndpoint: string
 let indexingStatusResolver: IndexingStatusResolver
 let networkSubgraph: NetworkSubgraph
 let client: IndexerManagementClient
@@ -78,9 +80,11 @@ const setup = async () => {
   contracts = await connectContracts(ethers.getDefaultProvider('rinkeby'), 4)
   await sequelize.sync({ force: true })
   logger = createLogger({ name: 'Indexer API Client', level: 'trace' })
+  indexNodeIDs = ['node_1']
+  statusEndpoint = 'http://localhost:8030/graphql'
   indexingStatusResolver = new IndexingStatusResolver({
     logger: logger,
-    statusEndpoint: 'http://localhost:8030/graphql',
+    statusEndpoint,
   })
   networkSubgraph = await NetworkSubgraph.create({
     logger,
@@ -93,6 +97,8 @@ const setup = async () => {
     address,
     contracts,
     indexingStatusResolver,
+    indexNodeIDs,
+    deploymentManagementEndpoint: statusEndpoint,
     networkSubgraph,
     logger,
     defaults,
@@ -461,23 +467,26 @@ describe('Feature: Inject $DAI variable', () => {
   })
 
   test('If feature is disabled, $DAI variable is not preserved', async () => {
-    const initial = {
-      deployment: '0x0000000000000000000000000000000000000000000000000000000000000000',
-      model: 'query { votes } => 10 * $n;',
-      variables: JSON.stringify({ DAI: '10.0' }),
-    }
-    const client = await createIndexerManagementClient({
+    // Recreate client with features.injectDai = false
+    client = await createIndexerManagementClient({
       models,
       address,
-      indexingStatusResolver,
-      networkSubgraph,
       contracts,
+      indexingStatusResolver,
+      indexNodeIDs,
+      deploymentManagementEndpoint: statusEndpoint,
+      networkSubgraph,
       logger,
       defaults,
       features: {
         injectDai: false,
       },
     })
+    const initial = {
+      deployment: '0x0000000000000000000000000000000000000000000000000000000000000000',
+      model: 'query { votes } => 10 * $n;',
+      variables: JSON.stringify({ n: 5, DAI: '10.0' }),
+    }
     await client.mutation(SET_COST_MODEL_MUTATION, { costModel: initial }).toPromise()
     const update = {
       deployment: '0x0000000000000000000000000000000000000000000000000000000000000000',

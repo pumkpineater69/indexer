@@ -1,9 +1,12 @@
 {
   "name": "@graphprotocol/indexer-common",
-  "version": "0.19.0",
+  "version": "0.19.2",
   "description": "Common library for Graph Protocol indexer components",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "/dist"
+  ],
   "repository": "https://github.com/graphprotocol/indexer",
   "author": "The Graph Foundation",
   "license": "MIT",
@@ -18,7 +21,7 @@
   },
   "dependencies": {
     "@graphprotocol/common-ts": "1.8.3",
-    "@graphprotocol/cost-model": "0.1.8",
+    "@graphprotocol/cost-model": "0.1.11",
     "@thi.ng/heaps": "1.2.38",
     "@urql/core": "2.4.4",
     "@urql/exchange-execute": "1.2.2",
@@ -30,9 +33,12 @@
     "fastify": "3.25.0",
     "graphql": "16.3.0",
     "graphql-tag": "2.12.6",
+    "jayson": "3.6.6",
     "morgan": "1.10.0",
     "ngeohash": "0.6.3",
+    "p-filter": "2.1.0",
     "p-retry": "4.6.1",
+    "p-timeout": "4.1.0",
     "sequelize": "6.18.0",
     "ts-custom-error": "^3.2.0"
   },

@@ -19,19 +19,19 @@ import {
   IndexerErrorCode,
   INDEXING_RULE_GLOBAL,
   IndexingRuleAttributes,
+  Network,
   NetworkSubgraph,
   POIDisputeAttributes,
+  ReceiptCollector,
   Subgraph,
   SubgraphIdentifierType,
 } from '@graphprotocol/indexer-common'
 import { Indexer } from './indexer'
-import { AgentConfig } from './types'
-import { Network } from './network'
+import { AgentConfig, AllocationManagementMode } from './types'
 import { BigNumber, utils } from 'ethers'
 import PQueue from 'p-queue'
 import pMap from 'p-map'
 import pFilter from 'p-filter'
-import { ReceiptCollector } from './query-fees'
 
 const allocationInList = (
   list: Allocation[],
@@ -130,6 +130,7 @@ class Agent {
   registerIndexer: boolean
   offchainSubgraphs: SubgraphDeploymentID[]
   receiptCollector: ReceiptCollector
+  allocationManagementMode: AllocationManagementMode
 
   constructor(
     logger: Logger,
@@ -141,6 +142,7 @@ class Agent {
     registerIndexer: boolean,
     offchainSubgraphs: SubgraphDeploymentID[],
     receiptCollector: ReceiptCollector,
+    allocationManagementMode: AllocationManagementMode,
   ) {
     this.logger = logger.child({ component: 'Agent' })
     this.metrics = metrics
@@ -151,6 +153,7 @@ class Agent {
     this.registerIndexer = registerIndexer
     this.offchainSubgraphs = offchainSubgraphs
     this.receiptCollector = receiptCollector
+    this.allocationManagementMode = allocationManagementMode
   }
 
   async start(): Promise<Agent> {
@@ -365,8 +368,8 @@ class Agent {
 
     join({
       ticker: timer(120_000),
-      paused: this.network.paused,
-      isOperator: this.network.isOperator,
+      paused: this.network.transactionManager.paused,
+      isOperator: this.network.transactionManager.isOperator,
       currentEpoch,
       currentEpochStartBlock,
       maxAllocationEpochs,
@@ -410,7 +413,9 @@ class Agent {
             {
               err: indexerError(IndexerErrorCode.IE034),
               indexer: toAddress(this.network.indexerAddress),
-              operator: toAddress(this.network.wallet.address),
+              operator: toAddress(
+                this.network.transactionManager.wallet.address,
+              ),
             },
           )
         }
@@ -424,14 +429,15 @@ class Agent {
 
         try {
           const disputableEpoch =
-            currentEpoch.toNumber() - this.network.poiDisputableEpochs
+            currentEpoch.toNumber() -
+            this.network.indexerConfigs.poiDisputableEpochs
           // Find disputable allocations
           await this.identifyPotentialDisputes(
             disputableAllocations,
             disputableEpoch,
           )
         } catch (err) {
-          this.logger.warn(`Failed PoI dispute monitoring`, { err })
+          this.logger.warn(`Failed POI dispute monitoring`, { err })
         }
         try {
           await this.reconcileDeployments(
@@ -441,14 +447,26 @@ class Agent {
           )
 
           // Reconcile allocations
-          await this.reconcileAllocations(
-            activeAllocations,
-            targetAllocations,
-            indexingRules,
-            currentEpoch.toNumber(),
-            currentEpochStartBlock,
-            maxAllocationEpochs,
-          )
+          if (this.allocationManagementMode == AllocationManagementMode.AUTO) {
+            await this.reconcileAllocations(
+              activeAllocations,
+              targetAllocations,
+              indexingRules,
+              currentEpoch.toNumber(),
+              currentEpochStartBlock,
+              maxAllocationEpochs,
+            )
+          } else if (
+            this.allocationManagementMode == AllocationManagementMode.MANUAL
+          ) {
+            this.logger.trace(
+              `Skipping allocation reconciliation since AllocationManagementMode = 'manual'`,
+              {
+                activeAllocations,
+                targetAllocations,
+              },
+            )
+          }
         } catch (err) {
           this.logger.warn(`Failed to reconcile indexer and network`, {
             err: indexerError(IndexerErrorCode.IE005, err),
@@ -497,7 +515,7 @@ class Agent {
     }
 
     this.logger.debug(
-      `Found new allocations onchain for subgraphs we have indexed. Let's compare PoIs to identify any potential indexing disputes`,
+      `Found new allocations onchain for subgraphs we have indexed. Let's compare POIs to identify any potential indexing disputes`,
     )
 
     const uniqueRewardsPools: RewardsPool[] = await Promise.all(
@@ -519,7 +537,7 @@ class Agent {
             pool.previousEpochStartBlockHash!,
           )
           pool.closedAtEpochStartBlockNumber = closedAtEpochStartBlock.number
-          pool.referencePOI = await this.indexer.proofOfIndexing(
+          pool.referencePOI = await this.indexer.statusResolver.proofOfIndexing(
             pool.subgraphDeployment,
             {
               number: closedAtEpochStartBlock.number,
@@ -529,14 +547,15 @@ class Agent {
           )
           pool.previousEpochStartBlockHash = previousEpochStartBlock.hash
           pool.previousEpochStartBlockNumber = previousEpochStartBlock.number
-          pool.referencePreviousPOI = await this.indexer.proofOfIndexing(
-            pool.subgraphDeployment,
-            {
-              number: previousEpochStartBlock.number,
-              hash: previousEpochStartBlock.hash,
-            },
-            pool.allocationIndexer,
-          )
+          pool.referencePreviousPOI =
+            await this.indexer.statusResolver.proofOfIndexing(
+              pool.subgraphDeployment,
+              {
+                number: previousEpochStartBlock.number,
+                hash: previousEpochStartBlock.hash,
+              },
+              pool.allocationIndexer,
+            )
           return pool
         }),
     )
@@ -593,7 +612,7 @@ class Agent {
     ).length
     const stored = await this.indexer.storePoiDisputes(disputes)
 
-    this.logger.info(`Disputable allocations' PoIs validated`, {
+    this.logger.info(`Disputable allocations' POIs validated`, {
       potentialDisputes: potentialDisputes,
       validAllocations: stored.length - potentialDisputes,
     })
@@ -840,7 +859,7 @@ class Agent {
         allocationAmount: formatGRT(desiredAllocationAmount),
       })
 
-      // Skip allocating if the previous allocation for this deployment was closed with a null or 0x00 PoI
+      // Skip allocating if the previous allocation for this deployment was closed with a null or 0x00 POI
       const closedAllocation = (
         await this.network.closedAllocations(deployment)
       )[0]
@@ -971,7 +990,7 @@ class Agent {
     epochStartBlock: BlockPointer,
     allocation: Allocation,
   ): Promise<{ closed: boolean; collectingQueryFees: boolean }> {
-    const poi = await this.indexer.proofOfIndexing(
+    const poi = await this.indexer.statusResolver.proofOfIndexing(
       allocation.subgraphDeployment.id,
       epochStartBlock,
       this.indexer.indexerAddress,
@@ -996,20 +1015,12 @@ class Agent {
           },
         )
       } else {
-        const previousEpochStartBlockNumber =
-          epochStartBlock.number -
-          (await this.network.contracts.epochManager.epochLength()).toNumber()
-        const failureBlock = indexingStatus.chains[0].latestBlock
-
-        // latest valid block (earliest possible is at previous epoch start
-        const validBlock = await this.network.ethereum.getBlock(
-          Math.min(previousEpochStartBlockNumber, failureBlock.number - 1),
-        )
-        const latestValidPoi = await this.indexer.proofOfIndexing(
-          allocation.subgraphDeployment.id,
-          validBlock,
-          this.indexer.indexerAddress,
-        )
+        const latestValidPoi =
+          await this.indexer.statusResolver.proofOfIndexing(
+            allocation.subgraphDeployment.id,
+            indexingStatus?.chains[0].latestBlock,
+            this.indexer.indexerAddress,
+          )
         this.logger.error(`Received a null or zero POI for deployment`, {
           deployment: allocation.subgraphDeployment.id.display,
           allocation: allocation.id,
@@ -1042,7 +1053,7 @@ class Agent {
     collectingQueryFees: boolean
     newAllocation: Allocation | undefined
   }> {
-    const poi = await this.indexer.proofOfIndexing(
+    const poi = await this.indexer.statusResolver.proofOfIndexing(
       existingAllocation.subgraphDeployment.id,
       epochStartBlock,
       this.indexer.indexerAddress,
@@ -1100,6 +1111,7 @@ export const startAgent = async (config: AgentConfig): Promise<Agent> => {
     config.registerIndexer,
     config.offchainSubgraphs,
     config.receiptCollector,
+    config.allocationManagementMode,
   )
   return await agent.start()
 }

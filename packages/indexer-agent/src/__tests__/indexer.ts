@@ -116,6 +116,7 @@ const setup = async () => {
     async: false,
     level: 'trace',
   })
+  wallet = Wallet.createRandom()
 
   sequelize = await connectDatabase(__DATABASE__)
   models = defineIndexerManagementModels(sequelize)
@@ -123,11 +124,10 @@ const setup = async () => {
   contracts = await connectContracts(wallet, 4)
   await sequelize.sync({ force: true })
 
-  wallet = Wallet.createRandom()
-
+  const statusEndpoint = 'http://localhost:8030/graphql'
   const indexingStatusResolver = new IndexingStatusResolver({
     logger: logger,
-    statusEndpoint: 'http://localhost:8030/graphql',
+    statusEndpoint: 'statusEndpoint',
   })
 
   const networkSubgraph = await NetworkSubgraph.create({
@@ -136,11 +136,14 @@ const setup = async () => {
     deployment: undefined,
   })
 
+  const indexNodeIDs = ['node_1']
   indexerManagementClient = await createIndexerManagementClient({
     models,
     address: toAddress(address),
     contracts: contracts,
     indexingStatusResolver,
+    indexNodeIDs,
+    deploymentManagementEndpoint: statusEndpoint,
     networkSubgraph,
     logger,
     defaults: {
@@ -221,7 +224,7 @@ describe('Indexer tests', () => {
     )
   })
 
-  test('Fetch POI Disputes', async () => {
+  test('Fetch POIDisputes', async () => {
     const disputes: POIDisputeAttributes[] = [TEST_DISPUTE_1, TEST_DISPUTE_2]
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

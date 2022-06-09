@@ -1,15 +1,15 @@
 import { GluegunToolbox } from 'gluegun'
 
 module.exports = {
-  name: 'rules',
+  name: 'allocations',
   alias: [],
-  description: 'Configure indexing rules',
+  description: 'Manage indexer allocations',
   hidden: false,
   dashed: false,
   run: async (toolbox: GluegunToolbox) => {
     const { print } = toolbox
     print.info(toolbox.command?.description)
-    print.printCommands(toolbox, ['indexer', 'rules'])
-    process.exitCode = -1
+    print.printCommands(toolbox, ['indexer', 'allocations'])
+    process.exitCode = 1
   },
 }
