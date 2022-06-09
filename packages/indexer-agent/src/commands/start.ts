@@ -418,7 +418,7 @@ export default {
         group: 'Indexer Infrastructure',
       })
       .config({
-        key: 'cfg-file',
+        key: 'config-file',
         description: 'Indexer agent configuration file (YAML format)',
         parseFn: function (cfgFilePath: string) {
           return yaml_parse(fs.readFileSync(cfgFilePath, 'utf-8'))
